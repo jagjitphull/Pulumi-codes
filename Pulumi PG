@@ -1,0 +1,85 @@
+Pulumi PG
+
+import * as pulumi from "@pulumi/pulumi";
+import * as aws from "@pulumi/aws";
+
+// Create a Security Group for SSH and PostgreSQL access
+const securityGroup = new aws.ec2.SecurityGroup("web-db-secgrp", {
+    vpcId: aws.ec2.getVpc({default: true}).then(vpc => vpc.id),
+    description: "Allow SSH and PostgreSQL access",
+    ingress: [
+        {
+            protocol: "tcp",
+            fromPort: 22,
+            toPort: 22,
+            cidrBlocks: ["0.0.0.0/0"],  // Allow SSH from anywhere (modify for production)
+        },
+        {
+            protocol: "tcp",
+            fromPort: 5432,
+            toPort: 5432,
+            cidrBlocks: ["0.0.0.0/0"],  // Allow PostgreSQL from anywhere (modify for production)
+        },
+    ],
+    egress: [
+        {
+            protocol: "-1",  // Allow all outbound traffic
+            fromPort: 0,
+            toPort: 0,
+            cidrBlocks: ["0.0.0.0/0"],
+        },
+    ],
+    tags: {
+        Name: "web-db-secgrp",
+    },
+});
+
+// Generate a new SSH key pair (if you don't have one already)
+// Note: Replace with your actual public key
+const keyPair = new aws.ec2.KeyPair("my-keypair", {
+    keyName: "my-keypair",
+    publicKey: "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAACAQDUWcfmYSRsrSYyLYATCPK2SFggXOHN7MLmbdz044pTOqvRPwRIcNZkMbArgI/5g6Lfkul58aJUCPF7q7MR3mWy8RJlTCfPEKjX8MXgBnbkMvoTj7SW56YWwKkpKr+JbeN6JEiSYOQovoGLMzoZGP504VX7pIdkz1Pi3027FCyCRnWdL7mjkdqwrYQHktQdBQ9DJDTeH5yeK+j1B/Vxi0jcNvIfhij3hDK9sL3E5zWfaneMf7JmoikJX5SJj3VzOdmclP67AqWWJgerpZH6okNDpgxh9V7m8qofHosOgBCK9cc1yJm+sNTXGpBAvJhX7+gHCKbpj0ZKdmsvGeD/PGq052AetH+1GK0fNHuH3UXAzCYsSFmcD0oQnjERXz6elW2DOF76LtYp3c8PhTA4PWulUs94LRN1YRnmoRldFfkcylxKWR6JExOFV72Zo1pOnsoqaJyy8Cv5RFUXYYXRZQNbT8MZPQF5F437kRZT+OTVXXbC8OJzkjh1aW3ykj8e+umBrDJLwQbpeDIe8yfeOiXCMe9UGmdqA3/Qne5hlewIGQU9lBDwS+zPgCvIMWJHGvyDI271WJeZzhp/CucljvtepqDWPJiX9Sv1QyN93RV40rgSvVrDtgDyOPu5GHVmNn5BdHgv1uiunWBm0zEuMDhFdxOlaclTsvKsUHCS2O03Kw== info@gnugroup.org",  // Replace with your actual SSH public key
+});
+
+// Get the latest Amazon Linux 2 AMI
+const ami = aws.ec2.getAmi({
+    mostRecent: true,
+    owners: ["amazon"],
+    filters: [
+        { name: "name", values: ["amzn2-ami-hvm-*-x86_64-gp2"] },
+    ],
+});
+
+// User data script to install PostgreSQL and configure it for remote access
+const userDataScript = `#!/bin/bash
+sudo yum update -y
+sudo yum install -y postgresql-server postgresql-contrib
+sudo postgresql-setup initdb
+sudo sed -i "s/^#listen_addresses = 'localhost'/listen_addresses = '*'/" /var/lib/pgsql/data/postgresql.conf
+echo "host all all 0.0.0.0/0 md5" | sudo tee -a /var/lib/pgsql/data/pg_hba.conf
+sudo systemctl enable postgresql
+sudo systemctl start postgresql
+sudo -i -u postgres psql -c "ALTER USER postgres PASSWORD 'your_password';"
+`;
+
+const server = new aws.ec2.Instance("web-db-server", {
+    instanceType: "t2.micro",
+    ami: ami.then(ami => ami.id),
+    securityGroups: [securityGroup.name],
+    keyName: keyPair.keyName,
+    userData: userDataScript,
+    tags: {
+        Name: "web-db-server",
+    },
+});
+
+// Export the public IP and DNS name of the instance
+export const publicIp = server.publicIp;
+export const publicDns = server.publicDns;
+
+
+ssh -i path-to-your-private-key ec2-user@<public-ip-or-dns>
+
+Remote Access 
+
+psql -h <public-ip-or-dns> -U postgres -d postgres
