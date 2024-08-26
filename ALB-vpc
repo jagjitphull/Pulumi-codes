@@ -1,0 +1,150 @@
+//alb
+
+import * as pulumi from "@pulumi/pulumi";
+import * as aws from "@pulumi/aws";
+import * as awsx from "@pulumi/awsx";
+
+// Create a new VPC
+const vpc = new awsx.ec2.Vpc("web-vpc", {
+    cidrBlock: "10.0.0.0/16",
+    numberOfAvailabilityZones: 2,
+});
+
+// Create a Security Group for SSH and HTTP access
+const securityGroup = new aws.ec2.SecurityGroup("web-sg", {
+    vpcId: vpc.id,
+    description: "Allow SSH and HTTP access",
+    ingress: [
+        {
+            protocol: "tcp",
+            fromPort: 22,
+            toPort: 22,
+            cidrBlocks: ["0.0.0.0/0"],  // Allow SSH from anywhere
+        },
+        {
+            protocol: "tcp",
+            fromPort: 80,
+            toPort: 80,
+            cidrBlocks: ["0.0.0.0/0"],  // Allow HTTP from anywhere
+        },
+    ],
+    egress: [
+        {
+            protocol: "-1",
+            fromPort: 0,
+            toPort: 0,
+            cidrBlocks: ["0.0.0.0/0"],
+        },
+    ],
+    tags: {
+        Name: "web-sg",
+    },
+});
+
+// Generate a new SSH key pair
+const keyPair = new aws.ec2.KeyPair("web-keypair", {
+    keyName: "web-keypair",
+    publicKey: "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAACAQC3nN...<your-public-key>",
+});
+
+// User data script to install Apache and start the service
+const userDataScript = `#!/bin/bash
+sudo yum update -y
+sudo yum install -y httpd
+sudo systemctl enable httpd
+sudo systemctl start httpd
+echo "Hello, World from $(hostname -f)" > /var/www/html/index.html
+`;
+
+
+// Create an EC2 Instance for Web Server
+const webServer1 = new aws.ec2.Instance("web-server-1", {
+    ami: aws.ec2.getAmi({
+        mostRecent: true,
+        owners: ["amazon"],
+        filters: [{ name: "name", values: ["amzn2-ami-hvm-*-x86_64-gp2"] }],
+    }).then(ami => ami.id),
+    instanceType: "t2.micro",
+    keyName: keyPair.keyName,
+    vpcSecurityGroupIds: [securityGroup.id],
+    subnetId: vpc.publicSubnetIds[0],  // Place in the first public subnet
+    userData: userDataScript,
+    tags: {
+        Name: "web-server-1",
+    },
+});
+
+const webServer2 = new aws.ec2.Instance("web-server-2", {
+    ami: aws.ec2.getAmi({
+        mostRecent: true,
+        owners: ["amazon"],
+        filters: [{ name: "name", values: ["amzn2-ami-hvm-*-x86_64-gp2"] }],
+    }).then(ami => ami.id),
+    instanceType: "t2.micro",
+    keyName: keyPair.keyName,
+    vpcSecurityGroupIds: [securityGroup.id],
+    subnetId: vpc.publicSubnetIds[1],  // Place in the second public subnet
+    userData: userDataScript,
+    tags: {
+        Name: "web-server-2",
+    },
+});
+
+// Create an Application Load Balancer
+const alb = new aws.lb.LoadBalancer("web-alb", {
+    securityGroups: [securityGroup.id],
+    subnets: vpc.publicSubnetIds,
+    loadBalancerType: "application",
+    tags: {
+        Name: "web-alb",
+    },
+});
+
+// Create a Target Group
+const targetGroup = new aws.lb.TargetGroup("web-target-group", {
+    port: 80,
+    protocol: "HTTP",
+    targetType: "instance",
+    vpcId: vpc.id,
+    healthCheck: {
+        path: "/",
+        interval: 30,
+        timeout: 5,
+        healthyThreshold: 5,
+        unhealthyThreshold: 2,
+    },
+    tags: {
+        Name: "web-target-group",
+    },
+});
+
+// Attach EC2 instances to the target group
+new aws.lb.TargetGroupAttachment("web-server-1-attachment", {
+    targetGroupArn: targetGroup.arn,
+    targetId: webServer1.id,
+    port: 80,
+});
+
+new aws.lb.TargetGroupAttachment("web-server-2-attachment", {
+    targetGroupArn: targetGroup.arn,
+    targetId: webServer2.id,
+    port: 80,
+});
+
+// Create a Listener for the ALB
+const listener = new aws.lb.Listener("web-listener", {
+    loadBalancerArn: alb.arn,
+    port: 80,
+    defaultActions: [{
+        type: "forward",
+        targetGroupArn: targetGroup.arn,
+    }],
+    tags: {
+        Name: "web-listener",
+    },
+});
+
+// Export the ALB's DNS name
+export const albDnsName = alb.dnsName;
+export const publicIp = webServer.publicIp;
+export const publicDns = webServer.publicDns;
