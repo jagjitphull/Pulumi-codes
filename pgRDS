@@ -1,57 +1,69 @@
-//pgRDS
-
 import * as pulumi from "@pulumi/pulumi";
 import * as aws from "@pulumi/aws";
 
-// Define the VPC and subnet group
-const vpc = new aws.ec2.Vpc("pgvpc", {
-    cidrBlock: "10.0.0.0/16",
-});
+// Load configuration
+const config = new pulumi.Config();
+const dbUsername = config.require("dbUsername");
+const dbPassword = config.requireSecret("dbPassword");  // Use a secret for the password
+const dbName = config.get("dbName") || "mydatabase";
 
-const subnet = new aws.ec2.Subnet("pgsubnet", {
-    vpcId: vpc.id,
-    cidrBlock: "10.0.1.0/24",
-    availabilityZone: "ap-south-1a",
-});
+// Get the default VPC
+const defaultVpc = aws.ec2.getVpc({ default: true });
 
-const subnetGroup = new aws.rds.SubnetGroup("pgsubnetgroup", {
-    subnetIds: [subnet.id],
-});
+// Get the subnets within the default VPC
+const subnets = defaultVpc.then(vpc => aws.ec2.getSubnets({ filters: [{ name: "vpc-id", values: [vpc.id] }] }));
 
-// Define the security group
-const securityGroup = new aws.ec2.SecurityGroup("pgsecuritygroup", {
-    vpcId: vpc.id,
+// Create a security group for the RDS instance
+const rdsSecurityGroup = new aws.ec2.SecurityGroup("rds-security-group", {
+    vpcId: defaultVpc.then(vpc => vpc.id),
+    description: "Allow access to the RDS instance",
     ingress: [
         {
             protocol: "tcp",
             fromPort: 5432,
             toPort: 5432,
-            cidrBlocks: ["0.0.0.0/0"],
+            cidrBlocks: ["0.0.0.0/0"],  // Allow access from anywhere (modify for production)
         },
     ],
     egress: [
         {
-            protocol: "-1",
+            protocol: "-1",  // Allow all outbound traffic
             fromPort: 0,
             toPort: 0,
             cidrBlocks: ["0.0.0.0/0"],
         },
     ],
+    tags: {
+        Name: "rds-security-group",
+    },
 });
 
-// Create the PostgreSQL RDS instance
-const db = new aws.rds.Instance("pgpostgresinstance", {
+// Create a subnet group for the RDS instance
+const subnetGroup = new aws.rds.SubnetGroup("rds-subnet-group", {
+    subnetIds: subnets.then(subnetResult => subnetResult.ids),
+    tags: {
+        Name: "rds-subnet-group",
+    },
+});
+
+// Create the RDS instance
+const rdsInstance = new aws.rds.Instance("my-postgresql-instance", {
+    allocatedStorage: 20,  // Storage size in GB
     engine: "postgres",
-    instanceClass: "db.t3.micro",
-    allocatedStorage: 20,
+    engineVersion: "16.4",  // Specify the PostgreSQL version
+    instanceClass: "db.t3.micro",  // Use a free-tier eligible instance type
+    dbName: dbName,
+    username: dbUsername,
+    password: dbPassword,
     dbSubnetGroupName: subnetGroup.name,
-    vpcSecurityGroupIds: [securityGroup.id],
-    dbName: "mydatabase",
-    username: "myusername",
-    password: "mypassword", // Replace with a secure password
-    skipFinalSnapshot: true,
+    vpcSecurityGroupIds: [rdsSecurityGroup.id],
+    skipFinalSnapshot: true,  // Skip final snapshot on deletion
+    publiclyAccessible: true,  // Modify based on whether you want it to be publicly accessible
+    tags: {
+        Name: "my-postgresql-instance",
+    },
 });
 
-// Export the database endpoint
-export const dbEndpoint = db.endpoint;
-export const dbPort = db.port;
+// Export the RDS instance endpoint and name
+export const rdsEndpoint = rdsInstance.endpoint;
+export const rdsInstanceName = rdsInstance.name;
