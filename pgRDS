@@ -1,6 +1,10 @@
 import * as pulumi from "@pulumi/pulumi";
 import * as aws from "@pulumi/aws";
 
+//set the following on cli
+// pulumi config set rds-pg:dbUsername postgres
+// pulumi config set rds-pg:dbPassword pass1234
+
 // Load configuration
 const config = new pulumi.Config();
 const dbUsername = config.require("dbUsername");
