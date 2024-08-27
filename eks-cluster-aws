@@ -1,0 +1,29 @@
+//eks cluste aws
+
+import * as aws from "@pulumi/aws";
+import * as awsx from "@pulumi/awsx";
+import * as eks from "@pulumi/eks";
+
+// Create a new VPC for the EKS cluster
+const vpc = new awsx.ec2.Vpc("eks-vpc", {
+    cidrBlock: "10.0.0.0/16",
+    numberOfAvailabilityZones: 2,
+});
+
+// Create the EKS cluster with default IAM role
+const cluster = new eks.Cluster("eks-cluster", {
+    vpcId: vpc.vpcId,
+    subnetIds: vpc.privateSubnetIds,
+    instanceType: "t3.medium",
+    desiredCapacity: 2,
+    minSize: 2,
+    maxSize: 3,
+    storageClasses: "gp2",
+    enabledClusterLogTypes: ["api", "audit", "authenticator"],
+});
+
+// Export the kubeconfig for the EKS cluster
+export const kubeconfig = cluster.kubeconfig;
+
+// Export the cluster name
+export const clusterName = cluster.eksCluster.name;
